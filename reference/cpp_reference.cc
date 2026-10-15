@@ -1,23 +1,9 @@
-#include "cpp_gemm.h"
+#include "gemm/gemms.h"
 #include <cassert>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <vector>
-
-const int ROWS = 1024, COLS = 1024;
-
-template <typename T> struct matrix {
-  std::vector<T> data;
-  int cols, rows;
-  matrix(int c, int r) : rows(r), cols(c), data(r * c) {}
-  matrix() = delete;
-  T operator()(int i, int j) { return data[i * cols + j]; }
-  T operator()(int i, int j) const { return data[i * cols + j]; }
-  T *operator[](int row) { return data.data() + row * cols; }
-  T *operator[](int row) const { return data.data() + row * cols; }
-};
 
 int main(int argc, char *argv[]) {
   int m = ROWS;
@@ -44,11 +30,6 @@ int main(int argc, char *argv[]) {
     for (int j = 0; j < n; j++)
       for (int ii = 0; ii < k; ii++)
         C[i][j] += A[i][ii] * B[ii][j];
-  for (int i = 0; i < m; i++) {
-    for (int j = 0; j < n; j++)
-      std::cout << C[i][j] << " ";
-    std::cout << "\n";
-  }
   gemm(A.data.data(), B.data.data(), C1, m, n, k);
   for (int i = 0; i < m; i++)
     for (int j = 0; j < n; j++)

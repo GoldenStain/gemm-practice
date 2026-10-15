@@ -1,0 +1,18 @@
+# clangd project config: CUDA flags apply only to .cu/.cuh files.
+CompileFlags:
+    Add:
+        - -std=c++20
+        - -I/home/ymxiao/gemm-practice
+
+---
+
+If:
+  PathMatch: .*\.(cu|cuh)$
+
+CompileFlags:
+  Add:
+    - -xcuda                       # .cuh 不被 clang 识别，必须显式指定语言
+    - --cuda-path=/usr/local/cuda
+    - --cuda-gpu-arch=sm_120
+    - --cuda-host-only             # 只要 host job，满足 clangd "恰好一个 job"
+    - -Wno-unknown-cuda-version
