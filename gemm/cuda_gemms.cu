@@ -8,7 +8,9 @@ __global__ void stupid_cuda_gemm(float *A, float *B, float *C, int m, int n,
                                  int k) {
   const uint x = blockIdx.x * blockDim.x + threadIdx.x;
   const uint y = blockIdx.y * blockDim.y + threadIdx.y;
-  for (int ii = 0; ii < k; ii++) {
-    INDEX(C, x, y, n) += INDEX(A, x, ii, k) * INDEX(B, ii, y, n);
+  if (x < m && y < n) {
+    for (int ii = 0; ii < k; ii++) {
+      INDEX(C, x, y, n) += INDEX(A, x, ii, k) * INDEX(B, ii, y, n);
+    }
   }
 }

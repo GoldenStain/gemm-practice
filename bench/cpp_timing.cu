@@ -1,5 +1,5 @@
 #include "bench/cpp_timing.h"
-#include "gemm/cuda_gemms.cu"
+#include "gemm/gemms.cuh"
 #include "gemm/gemms.h"
 #include <algorithm>
 #include <cassert>
@@ -23,6 +23,7 @@ std::unordered_map<std::string, Fn> &KernelBench::table() {
 
 void setup_register() {
   KernelBench::add("stupid_cuda_gemm", stupid_cuda_gemm);
+  KernelBench::add("naive_cuda_gemm", naive_cuda_gemm);
 }
 
 void KernelBench::add(const std::string &name, Fn fn) {
@@ -41,15 +42,18 @@ void KernelBench::benchmark(const std::string &name, int iters, int warmup) {
   float *dB = nullptr;
   float *dC = nullptr;
   float *hC = (float *)malloc(copy_size);
-  cudaMalloc(&dA, ROWS * COLS * sizeof(float));
-  cudaMalloc(&dB, ROWS * COLS * sizeof(float));
-  cudaMalloc(&dC, ROWS * COLS * sizeof(float));
+  CUDA_CHECK(cudaMalloc(&dA, ROWS * COLS * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&dB, ROWS * COLS * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&dC, ROWS * COLS * sizeof(float)));
 
   std::generate(A.data.begin(), A.data.end(), [&] { return dist(gen); });
   std::generate(B.data.begin(), B.data.end(), [&] { return dist(gen); });
 
-  cudaMemcpy(dA, A.data.data(), copy_size, cudaMemcpyHostToDevice);
-  cudaMemcpy(dB, B.data.data(), copy_size, cudaMemcpyHostToDevice);
+  // Initialize device side data ptrs
+  CUDA_CHECK(cudaMemcpy(dA, A.data.data(), copy_size, cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(dB, B.data.data(), copy_size, cudaMemcpyHostToDevice));
+  // cudaMemset only accepts int
+  CUDA_CHECK(cudaMemset(dC, 0, copy_size));
 
   auto fn = KernelBench::table().at(name);
   // Calculate reference.
@@ -57,40 +61,53 @@ void KernelBench::benchmark(const std::string &name, int iters, int warmup) {
   // Calculate with CUDA
   dim3 grid{CEIL_DIV(ROWS, 32), CEIL_DIV(COLS, 32), 1};
   dim3 block{32, 32, 1};
+  if (name != "stupid_cuda_gemm") {
+    block = dim3{32 * 32};
+  }
   fn<<<grid, block>>>(dA, dB, dC, ROWS, COLS, ROWS);
-  cudaMemcpy(hC, dC, copy_size, cudaMemcpyDeviceToHost);
+  CUDA_CHECK(cudaMemcpy(hC, dC, copy_size, cudaMemcpyDeviceToHost));
 
   assert(check_match<float>(C.data.data(), hC, copy_size / sizeof(float)));
 
   // GPU part
   // warmup
   for (int i = 0; i < warmup; i++) {
-    fn<<<grid, block>>>(A.data.data(), B.data.data(), dC, ROWS, COLS, ROWS);
+    fn<<<grid, block>>>(dA, dB, dC, ROWS, COLS, ROWS);
+    CUDA_CHECK(cudaGetLastError());
   }
   // Real timing
   // GPU part
-  cudaDeviceSynchronize();
-  auto t0 = std::chrono::steady_clock::now();
+  cudaEvent_t start;
+  cudaEvent_t stop;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+  CUDA_CHECK(cudaEventRecord(start));
   for (int i = 0; i < iters; i++) {
-    fn<<<grid, block>>>(A.data.data(), B.data.data(), dC, ROWS, COLS, ROWS);
+    fn<<<grid, block>>>(dA, dB, dC, ROWS, COLS, ROWS);
+    CUDA_CHECK(cudaGetLastError());
   }
-  cudaDeviceSynchronize();
-  auto t1 = std::chrono::steady_clock::now();
-  double gpu_time =
-      std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
+  CUDA_CHECK(cudaEventRecord(stop));
+  CUDA_CHECK(cudaEventSynchronize(stop));
+  float elapsed_time;
+  CUDA_CHECK(cudaEventElapsedTime(&elapsed_time, start, stop));
+  double gpu_time = static_cast<double>(elapsed_time) / iters * 1000.0;
+
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
+
   // CPU part
   // warm up
   for (int i = 0; i < warmup; i++) {
     gemm(A.data.data(), B.data.data(), C.data.data(), ROWS, COLS, ROWS);
   }
   // real timing
-  t0 = std::chrono::steady_clock::now();
+  auto t0 = std::chrono::steady_clock::now();
   for (int i = 0; i < iters; i++) {
     gemm(A.data.data(), B.data.data(), C.data.data(), ROWS, COLS, ROWS);
   }
-  t1 = std::chrono::steady_clock::now();
+  auto t1 = std::chrono::steady_clock::now();
   double cpu_time =
       std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
-  printf("GPU time: %lfmicro seconds,\nCPU time: %lfmicro seconds", gpu_time,
+  printf("GPU time: %lf micro seconds,\nCPU time: %lf micro seconds", gpu_time,
          cpu_time);
 }
